@@ -52,10 +52,31 @@ def guide(data):
     pyro.sample('obs', dist.Normal(locs_q, scale_q))
 
 
+def component_1(data):
+    scale_q = pyro.param('scale_q', torch.tensor(1.),
+                         constraint=constraints.positive)
 
-def approximation(data, components, weights):
+    locs_q = pyro.param('locs_q', torch.tensor(5.),
+                             constraint=constraints.positive)
+
+    pyro.sample('obs', dist.Normal(locs_q, scale_q))
+
+def component_2(data):
+    scale_q = pyro.param('scale_q', torch.tensor(2.),
+                         constraint=constraints.positive)
+
+    locs_q = pyro.param('locs_q', torch.tensor(10.),
+                             constraint=constraints.positive)
+
+    pyro.sample('obs', dist.Normal(locs_q, scale_q))
+
+
+
+def approximation(data):
+    weights = torch.tensor([0.4, 0.6])
     assignment = pyro.sample('assignment', dist.Categorical(weights))
-    sample = components[assignment](data)
+    components = [component_1, component_2]
+    components[assignment](data)
 
 def dummy_approximation(data):
     scale_a = pyro.param('scale_a', torch.tensor(2),
@@ -110,10 +131,9 @@ svi = SVI(model, guide, optimizer, loss=relbo)
 
 # do gradient steps
 
-wrapped_approximation = approximation(data, components=[guide, guide] ,weights=torch.tensor([0.4, 0.6]))
 
 for step in range(n_steps):
-    svi.step(data, approximation=dummy_approximation)
+    svi.step(data, approximation=approximation)
     if step % 100 == 0:
         print('.', end='')
 
