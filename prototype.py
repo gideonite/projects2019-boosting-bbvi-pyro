@@ -20,6 +20,7 @@ n_steps = 2 if smoke_test else 1500
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
+print(pyro.__version__) # returns 0.5.something. Why is this bad? #TODO(gideon)
 assert pyro.__version__.startswith('0.4.1')
 pyro.enable_validation(True)
 
