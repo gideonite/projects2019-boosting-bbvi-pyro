@@ -1,3 +1,0 @@
-conda install -y pytorch torchvision -c pytorch
-conda install -y scipy numpy matplotlib
-pip install pyro-ppl
