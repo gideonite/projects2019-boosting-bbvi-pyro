@@ -7,14 +7,14 @@ from pyro.optim import Adam, SGD
 from pyro.infer import SVI, Trace_ELBO, config_enumerate
 import pyro.distributions as dist
 from pyro.infer.autoguide import AutoDelta
-from pyro import poutine
+from pyro import poutine    
 from pyro.poutine import trace, replay, block
 from functools import partial
 import numpy as np
 import scipy.stats
-from matplotlib import pyplot
 from pyro.infer.autoguide import AutoDelta
 from collections import defaultdict
+from matplotlib import pyplot
 
 PRINT_INTERMEDIATE_LATENT_VALUES = False
 PRINT_TRACES = False
@@ -90,8 +90,8 @@ def relbo(model, guide, *args, **kwargs):
     # we instead reuse the corresponding sample from the guide. In probabilistic
     # terms, this means our loss is constructed as an expectation w.r.t. the joint
     # distribution defined by the guide.
-    model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
-    approximation_trace = trace(replay(block(approximation, expose=["obs"]), guide_trace)).get_trace(*args, **kwargs)
+    model_trace = trace(replay(model, trace=guide_trace)).get_trace(*args, **kwargs)
+    approximation_trace = trace(replay(block(approximation, expose=["obs"]), trace=guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
     elbo = 0.
     # Loop over all the sample sites in the model and add the corresponding
@@ -159,7 +159,7 @@ def boosting_bbvi():
         pyplot.plot(range(len(losses)), losses)
         pyplot.xlabel('Update Steps')
         pyplot.ylabel('-ELBO')
-        pyplot.title('-ELBO against time for component{}'.format(t));
+        pyplot.title('-ELBO against time for component {}'.format(t));
         pyplot.show()
 
         components.append(wrapped_guide)
