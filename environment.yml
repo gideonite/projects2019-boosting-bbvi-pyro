@@ -1,0 +1,14 @@
+name: bbbvipyro
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - matplotlib
+  - numpy
+  - scipy
+  - torchvision
+  - pytorch
+  - pip
+  - pip:
+    - pyro-ppl==0.5.1
+prefix: /cluster/home/dgideon/software/anaconda3/envs/bbbvipyro
