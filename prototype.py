@@ -16,12 +16,12 @@ from pyro.infer.autoguide import AutoDelta
 from collections import defaultdict
 from matplotlib import pyplot
 
-PRINT_INTERMEDIATE_LATENT_VALUES = False
+PRINT_INTERMEDIATE_LATENT_VALUES = True
 PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
 smoke_test = ('CI' in os.environ)
-n_steps = 2 if smoke_test else 1200
+n_steps = 2 if smoke_test else 1000
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
@@ -32,10 +32,10 @@ pyro.clear_param_store()
 
 data = torch.tensor([0., 1., 2., 0, 0.5, 1.5, 10., 11., 12., 10.6, 11.8, 12.2])
 
-n = torch.distributions.Normal(torch.tensor([2.0]), torch.tensor([1.0]))
-m = torch.distributions.Normal(torch.tensor([10.0]), torch.tensor([1.0]))
-
-data = torch.cat((n.sample((60,)), m.sample((40,))))
+# n = torch.distributions.Normal(torch.tensor([2.0]), torch.tensor([1.0]))
+# m = torch.distributions.Normal(torch.tensor([10.0]), torch.tensor([1.0]))
+#
+# data = torch.cat((n.sample((60,)), m.sample((40,))))
 
 
 K = 2  # Fixed number of components.
@@ -49,25 +49,26 @@ def model(data):
         locs = pyro.sample('locs', dist.Normal(0., 10.))
 
     # Local variables.
-    assignment = pyro.sample('assignment', dist.Categorical(weights))
-    pyro.sample('obs', dist.Normal(locs[assignment], scale))
+    for i in pyro.plate('data', len(data)):
+        assignment = pyro.sample('assignment_{}'.format(i), dist.Categorical(weights))
+        pyro.sample('obs_{}'.format(i), dist.Normal(locs[assignment], scale), obs=data[i])
 
 
-def guide(data, index):
-    scale_q = pyro.param('scale_{}'.format(index), torch.tensor(1.),
-                         constraint=constraints.positive)
+def guide(data, index, sample_id=None):
+    # TODO: We removed the positive constraint here to make Adam work
+    scale_q = pyro.param('scale_{}'.format(index), torch.tensor(1.))
 
-    locs_q = pyro.param('locs_{}'.format(index), torch.tensor(5.),
-                             constraint=constraints.positive)
+    locs_q = pyro.param('locs_{}'.format(index), torch.tensor(10.))
 
-    pyro.sample('obs', dist.Normal(locs_q, scale_q))
+    pyro.sample('obs_{}'.format(sample_id), dist.Normal(locs_q, scale_q))
 
 
 @config_enumerate
 def approximation(data, components, weights):
-
-    assignment = pyro.sample('assignment', dist.Categorical(weights))
-    components[assignment](data)
+    for i in pyro.plate('samples', len(data)):
+        assignment = pyro.sample('assignment_{}'.format(i),
+            dist.Categorical(weights))
+        components[assignment](data, sample_id=i)
 
 
 def dummy_approximation(data):
@@ -77,53 +78,14 @@ def dummy_approximation(data):
     sample = pyro.sample('obs', dist.Normal(locs_a, scale_a))
 
 
-def relbo(model, guide, *args, **kwargs):
-
-    approximation = kwargs.pop('approximation', None)
-    # Run the guide with the arguments passed to SVI.step() and trace the execution,
-    # i.e. record all the calls to Pyro primitives like sample() and param().
-    guide_trace = trace(guide).get_trace(*args, **kwargs)
-    # Now run the model with the same arguments and trace the execution. Because
-    # model is being run with replay, whenever we encounter a sample site in the
-    # model, instead of sampling from the corresponding distribution in the model,
-    # we instead reuse the corresponding sample from the guide. In probabilistic
-    # terms, this means our loss is constructed as an expectation w.r.t. the joint
-    # distribution defined by the guide.
-    model_trace = trace(replay(model, trace=guide_trace)).get_trace(*args, **kwargs)
-    approximation_trace = trace(replay(block(approximation, expose=["obs"]), trace=guide_trace)).get_trace(*args, **kwargs)
-    # We will accumulate the various terms of the ELBO in `elbo`.
-    elbo = 0.
-    # Loop over all the sample sites in the model and add the corresponding
-    # log p(z) term to the ELBO. Note that this will also include any observed
-    # data, i.e. sample sites with the keyword `obs=...`.
-    elbo = elbo + model_trace.log_prob_sum()        
-    # Loop over all the sample sites in the guide and add the corresponding
-    # -log q(z) term to the ELBO.
-    elbo = elbo - guide_trace.log_prob_sum()
-    elbo = elbo - approximation_trace.log_prob_sum()
-    
-    # Return (-elbo) since by convention we do gradient descent on a loss and
-    # the ELBO is a lower bound that needs to be maximized.
-    if elbo < 10e-8 and PRINT_TRACES:
-        print('Guide trace')
-        print(guide_trace.log_prob_sum())
-        print('Model trace')
-        print(model_trace.log_prob_sum())   
-        print('Approximation trace')
-        print(approximation_trace.log_prob_sum())
-    return -elbo
-
 def boosting_bbvi():
-    # setup the optimizer
-    adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
-    optimizer = Adam(adam_params)
-
     n_iterations = 2
 
-    initial_approximation = dummy_approximation
+    initial_approximation = partial(guide, index=0)
     components = [initial_approximation]
     weights = torch.tensor([1.])
-    wrapped_approximation = partial(approximation, components=components, weights=weights)
+    wrapped_approximation = partial(approximation, components=components,
+                                    weights=weights)
 
     locs = [0]
     scales = [0]
@@ -132,31 +94,36 @@ def boosting_bbvi():
     for t in range(1, n_iterations + 1):
         # setup the inference algorithm
 
-        block(wrapped_approximation, expose=["obs"])
+        block(wrapped_approximation, expose_fn=lambda site: 'obs_' not in site['name'])
         wrapped_guide = partial(guide, index=t)
         # svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
-        loss_fn = pyro.infer.TraceEnum_ELBO().differentiable_loss(model, wrapped_guide, data)
+
         # do gradient steps
         losses = []
         # Register hooks to monitor gradient norms.
         wrapped_guide(data)
-        print(pyro.get_param_store().named_parameters())
         param_name_1 = 'scale_{}'.format(t)
         param_name_2 = 'locs_{}'.format(t)
         adam_params = [pyro.param(param_name_1), pyro.param(param_name_2)]
         optimizer = torch.optim.Adam(adam_params, lr=0.001)
-
+        pyro.get_param_store().named_parameters()
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
                 value.register_hook(lambda g, name=name: gradient_norms[name].append(g.norm().item()))
         
         for step in range(n_steps):
-            loss = loss_fn - trace(wrapped_approximation).get_trace(data).log_prob_sum()
-            loss.backward()
+            print('Step: ', step)
+            approximation_log_prob = trace(wrapped_approximation).get_trace(data).log_prob_sum()
+            loss_fn = pyro.infer.TraceEnum_ELBO().differentiable_loss(model,
+                wrapped_guide,
+                data)
+            loss = loss_fn
+            loss.backward(retain_graph=True)
             optimizer.step()
             optimizer.zero_grad()
             losses.append(loss)
-            if (loss > 1000 and PRINT_INTERMEDIATE_LATENT_VALUES):
+
+            if PRINT_INTERMEDIATE_LATENT_VALUES:
                 print('Loss: {}'.format(loss))
                 scale = pyro.param("scale_{}".format(t)).item()
                 loc = pyro.param("locs_{}".format(t)).item()
@@ -165,7 +132,6 @@ def boosting_bbvi():
 
             if step % 100 == 0:
                 print('.', end=' ')
-
 
         pyplot.plot(range(len(losses)), losses)
         pyplot.xlabel('Update Steps')
@@ -194,7 +160,7 @@ def boosting_bbvi():
         pyplot.plot(grad_norms, label=name)
         pyplot.xlabel('iters')
         pyplot.ylabel('gradient norm')
-        pyplot.yscale('log')
+        # pyplot.yscale('log')
         pyplot.legend(loc='best')
         pyplot.title('Gradient norms during SVI');
     pyplot.show()  
@@ -211,7 +177,7 @@ def boosting_bbvi():
     print(locs)
     print(scales)
 
-    X = np.arange(-3,18,0.1)
+    X = np.arange(-3, 18, 0.1)
     Y1 = weights[1].item() * scipy.stats.norm.pdf((X - locs[1]) / scales[1])
     Y2 = weights[2].item() * scipy.stats.norm.pdf((X - locs[2]) / scales[2])
     #Y3 = weights[3].item() * scipy.stats.norm.pdf((X - locs[3] / scales[3]))
