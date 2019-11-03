@@ -25,7 +25,6 @@ n_steps = 2 if smoke_test else 1200
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
-assert pyro.__version__.startswith('0.4.1')
 pyro.enable_validation(True)
 
 # clear the param store in case we're in a REPL
@@ -49,10 +48,9 @@ def model(data):
     with pyro.plate('components', K):
         locs = pyro.sample('locs', dist.Normal(0., 10.))
 
-    with pyro.plate('data', len(data)):
-        # Local variables.
-        assignment = pyro.sample('assignment', dist.Categorical(weights))
-        pyro.sample('obs', dist.Normal(locs[assignment], scale), obs=data)
+    # Local variables.
+    assignment = pyro.sample('assignment', dist.Categorical(weights))
+    pyro.sample('obs', dist.Normal(locs[assignment], scale))
 
 
 def guide(data, index):
@@ -67,6 +65,7 @@ def guide(data, index):
 
 @config_enumerate
 def approximation(data, components, weights):
+
     assignment = pyro.sample('assignment', dist.Categorical(weights))
     components[assignment](data)
 
@@ -132,18 +131,30 @@ def boosting_bbvi():
     gradient_norms = defaultdict(list)
     for t in range(1, n_iterations + 1):
         # setup the inference algorithm
+
+        block(wrapped_approximation, expose=["obs"])
         wrapped_guide = partial(guide, index=t)
-        svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
+        # svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
+        loss_fn = pyro.infer.TraceEnum_ELBO().differentiable_loss(model, wrapped_guide, data)
         # do gradient steps
         losses = []
         # Register hooks to monitor gradient norms.
         wrapped_guide(data)
+        print(pyro.get_param_store().named_parameters())
+        param_name_1 = 'scale_{}'.format(t)
+        param_name_2 = 'locs_{}'.format(t)
+        adam_params = [pyro.param(param_name_1), pyro.param(param_name_2)]
+        optimizer = torch.optim.Adam(adam_params, lr=0.001)
+
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
                 value.register_hook(lambda g, name=name: gradient_norms[name].append(g.norm().item()))
         
         for step in range(n_steps):
-            loss = svi.step(data, approximation=wrapped_approximation)
+            loss = loss_fn - trace(wrapped_approximation).get_trace(data).log_prob_sum()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
             losses.append(loss)
             if (loss > 1000 and PRINT_INTERMEDIATE_LATENT_VALUES):
                 print('Loss: {}'.format(loss))
