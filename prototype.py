@@ -16,7 +16,7 @@ from pyro.infer.autoguide import AutoDelta
 from collections import defaultdict
 from matplotlib import pyplot
 
-PRINT_INTERMEDIATE_LATENT_VALUES = False
+PRINT_INTERMEDIATE_LATENT_VALUES = True
 PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
@@ -49,32 +49,30 @@ def model(data):
         locs = pyro.sample('locs', dist.Normal(0., 10.))
 
     # Local variables.
-    for i in pyro.plate('data', len(data)):
-        assignment = pyro.sample('assignment_{}'.format(i), dist.Categorical(weights))
-        pyro.sample('obs_{}'.format(i), dist.Normal(locs[assignment], scale), obs=data[i])
+    assignment = pyro.sample('assignment', dist.Categorical(weights))
+    pyro.sample('obs', dist.Normal(locs[assignment], scale))
 
 
-def guide(data, index, sample_id=None):
+def guide(data, index):
     # TODO: We removed the positive constraint here to make Adam work
     scale_q = pyro.param('scale_{}'.format(index), torch.tensor(1.))
 
-    locs_q = pyro.param('locs_{}'.format(index), torch.tensor(10.))
+    locs_q = pyro.param('locs_{}'.format(index), torch.tensor(5.))
 
-    pyro.sample('obs_{}'.format(sample_id), dist.Normal(locs_q, scale_q))
+    pyro.sample('obs', dist.Normal(locs_q, scale_q))
 
 
 @config_enumerate
 def approximation(data, components, weights):
-    for i in pyro.plate('samples', len(data)):
-        assignment = pyro.sample('assignment_{}'.format(i),
+        assignment = pyro.sample('assignment',
             dist.Categorical(weights))
-        components[assignment](data, sample_id=i)
+        components[assignment](data)
 
 
 def dummy_approximation(data, sample_id=None):
 
     scale_a = torch.tensor([1.])
-    locs_a = torch.tensor([20.])
+    locs_a = torch.tensor([5.])
     pyro.sample('obs', dist.Normal(locs_a, scale_a))
 
 def relbo(model, guide, *args, **kwargs):
@@ -107,7 +105,6 @@ def relbo(model, guide, *args, **kwargs):
     return -elbo
 
 
-
 def boosting_bbvi():
     n_iterations = 2
 
@@ -133,33 +130,29 @@ def boosting_bbvi():
         wrapped_guide(data)
         param_name_1 = 'scale_{}'.format(t)
         param_name_2 = 'locs_{}'.format(t)
-        adam_params = [pyro.param(param_name_1), pyro.param(param_name_2)]
+        adam_params = []
+        for name, value in pyro.get_param_store().named_parameters():
+            print("add parameter: ", name)
+            adam_params.append(pyro.param(name))
+
         optimizer = torch.optim.Adam(adam_params, lr=0.001)
 
-        adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
-        optimizer = Adam(adam_params)
-        print(pyro.get_param_store().named_parameters())
+        #adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
+        #optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
                 value.register_hook(lambda g, name=name: gradient_norms[name].append(g.norm().item()))
 
-        svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
+        #svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
         for step in range(n_steps):
-            print('Step: ', step)
-            # approximation_log_prob = trace(block(wrapped_approximation, expose_fn=lambda site: 'obs_' in site['name'])).get_trace(data).log_prob_sum()
-            # loss_fn = pyro.infer.TraceEnum_ELBO().differentiable_loss(model,
-            #     wrapped_guide,
-            #     data)
-            # loss = loss_fn + approximation_log_prob
-            #
-            # loss.backward(retain_graph=True)
-            # optimizer.step()
-            # # for name, value in pyro.get_param_store().named_parameters():
-            # #     print(name)
-            # #     print(pyro.param(name))
-            # #     print(pyro.param(name).grad)
-            # optimizer.zero_grad()
-            loss = svi.step(data, approximation=wrapped_approximation)
+            approximation_log_prob = trace(block(wrapped_approximation, expose=['obs'])).get_trace(data).log_prob_sum()
+            loss_fn = pyro.infer.TraceEnum_ELBO().differentiable_loss(model,
+                wrapped_guide,
+                data)
+            loss = loss_fn + approximation_log_prob
+            loss.backward(retain_graph=True)
+            optimizer.step()
+            #loss = svi.step(data, approximation=wrapped_approximation)
             losses.append(loss)
 
             if PRINT_INTERMEDIATE_LATENT_VALUES:
