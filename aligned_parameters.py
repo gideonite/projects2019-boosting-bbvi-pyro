@@ -40,11 +40,13 @@ n = torch.distributions.Normal(torch.tensor([2.0]), torch.tensor([1.0]))
 K = 2  # Fixed number of components.
 
 class Guide:
-    def __init__(self, index):
+    def __init__(self, index, initial_loc=5.0, initial_scale=1.0):
         self.index = index
+        self.initial_scale = initial_scale
+        self.initial_loc = initial_loc
     def get_distribution(self):
-        scale_q = pyro.param('scale_{}'.format(self.index), torch.tensor(1.), constraints.positive)
-        locs_q = pyro.param('locs_{}'.format(self.index), torch.tensor(5.))
+        scale_q = pyro.param('scale_{}'.format(self.index), torch.tensor(self.initial_scale), constraints.positive)
+        locs_q = pyro.param('locs_{}'.format(self.index), torch.tensor(self.initial_loc))
         return dist.Normal(locs_q, scale_q)
 
     def __call__(self, data):
@@ -105,7 +107,7 @@ def relbo(model, guide, *args, **kwargs):
     elbo = elbo - guide_trace.log_prob_sum()
     elbo = elbo - approximation_trace.log_prob_sum()
 
-    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
+    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).loss_and_grads(model,
                                                                guide,
                                                         *args, **kwargs)
 
@@ -118,7 +120,7 @@ def relbo(model, guide, *args, **kwargs):
 def boosting_bbvi():
     n_iterations = 2
 
-    initial_approximation = Guide(0)
+    initial_approximation = Guide(0, initial_loc=20.0)
     components = [initial_approximation]
     weights = torch.tensor([1.])
     wrapped_approximation = partial(approximation, components=components,
