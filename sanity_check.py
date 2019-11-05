@@ -46,7 +46,7 @@ K = 2  # Fixed number of components.
 #         assignment = pyro.sample('assignment', dist.Categorical(weights))
 #         pyro.sample('obs', dist.Normal(locs[assignment], scales[assignment]), obs=data)
 
-@config_enumerate
+#@config_enumerate
 def model(data):
     # Global variables.
     weights = pyro.sample('weights', dist.Dirichlet(0.5 * torch.ones(K)))
@@ -61,7 +61,7 @@ def model(data):
 
 
 
-@config_enumerate
+#@config_enumerate
 def guide(data):
     weights = torch.tensor([0.5, 0.5])
     scale_1 = pyro.param('scale_q1', torch.tensor([1.0]), constraints.positive)
@@ -74,7 +74,7 @@ def guide(data):
     for i in pyro.plate('data', len(data)):
         # Local variables.
         assignment = pyro.sample('assignment_{}'.format(i), dist.Categorical(weights))
-        pyro.sample('obs_{}'.format(i), dist.Normal(locs[assignment], scale_1), obs=data[i])
+        pyro.sample('obs_{}'.format(i), dist.Normal(locs[assignment], scale_1))
 
 
 @config_enumerate
@@ -94,8 +94,8 @@ adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
 optimizer = Adam(adam_params)
 
 # setup the inference algorithm
-svi = SVI(model, global_guide, optimizer, loss=TraceEnum_ELBO())
-
+svi = SVI(model, guide, optimizer, loss=TraceEnum_ELBO())
+	
 
 def initialize(seed):
     pyro.set_rng_seed(seed)
