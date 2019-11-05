@@ -85,27 +85,9 @@ def relbo(model, guide, *args, **kwargs):
     # Run the guide with the arguments passed to SVI.step() and trace the execution,
     # i.e. record all the calls to Pyro primitives like sample() and param().
     guide_trace = trace(guide).get_trace(*args, **kwargs)
-    # Now run the model with the same arguments and trace the execution. Because
-    # model is being run with replay, whenever we encounter a sample site in the
-    # model, instead of sampling from the corresponding distribution in the model,
-    # we instead reuse the corresponding sample from the guide. In probabilistic
-    # terms, this means our loss is constructed as an expectation w.r.t. the joint
-    # distribution defined by the guide.
-    model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
-
 
     approximation_trace = trace(replay(block(approximation, expose_fn= lambda site: 'obs_' in site['name']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
-    elbo = 0.
-
-    # Loop over all the sample sites in the model and add the corresponding
-    # log p(z) term to the ELBO. Note that this will also include any observed
-    # data, i.e. sample sites with the keyword `obs=...`.
-    elbo = elbo + model_trace.log_prob_sum()
-    # Loop over all the sample sites in the guide and add the corresponding
-    # -log q(z) term to the ELBO.
-    elbo = elbo - guide_trace.log_prob_sum()
-    elbo = elbo - approximation_trace.log_prob_sum()
 
     loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).loss_and_grads(model,
                                                                guide,
