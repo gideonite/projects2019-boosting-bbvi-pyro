@@ -31,10 +31,11 @@ pyro.enable_validation(True)
 pyro.clear_param_store()
 
 data = torch.tensor([0., 1., 2., 0, 0.5, 1.5, 10., 11., 12., 10.6, 11.8, 12.2])
+# data = torch.tensor([0., 1., 2., 0, 0.5, 1.5])
 
 n = torch.distributions.Normal(torch.tensor([2.0]), torch.tensor([1.0]))
 # m = torch.distributions.Normal(torch.tensor([10.0]), torch.tensor([1.0]))
-# data = n.sample((60,))
+#data = n.sample((60,))
 #data = torch.cat((n.sample((60,)), m.sample((40,))))
 
 K = 2  # Fixed number of components.
@@ -84,18 +85,24 @@ def relbo(model, guide, *args, **kwargs):
     approximation = kwargs.pop('approximation', None)
     # Run the guide with the arguments passed to SVI.step() and trace the execution,
     # i.e. record all the calls to Pyro primitives like sample() and param().
+    #print("enter relbo")
     guide_trace = trace(guide).get_trace(*args, **kwargs)
+    #print(guide_trace.nodes['obs_1'])
+    model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
+    #print(model_trace.nodes['obs_1'])
+
 
     approximation_trace = trace(replay(block(approximation, expose_fn= lambda site: 'obs_' in site['name']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
 
-    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).loss_and_grads(model,
+    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
                                                                guide,
                                                         *args, **kwargs)
 
     elbo = -loss_fn - approximation_trace.log_prob_sum()
     # Return (-elbo) since by convention we do gradient descent on a loss and
     # the ELBO is a lower bound that needs to be maximized.
+
     return -elbo
 
 
@@ -189,7 +196,7 @@ def boosting_bbvi():
     X = np.arange(-3, 18, 0.1)
     Y1 = weights[1].item() * scipy.stats.norm.pdf((X - locs[1]) / scales[1])
     Y2 = weights[2].item() * scipy.stats.norm.pdf((X - locs[2]) / scales[2])
-    #Y3 = weights[3].item() * scipy.stats.norm.pdf((X - locs[3] / scales[3]))
+    # Y3 = weights[3].item() * scipy.stats.norm.pdf((X - locs[3] / scales[3]))
 
     pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
     pyplot.plot(X, Y1, 'r-')
