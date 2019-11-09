@@ -75,7 +75,9 @@ def relbo(model, guide, *args, **kwargs):
     approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
 
-    elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
+    # This is how we computed the ELBO before using TraceEnum_ELBO:
+    # elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
+    
     loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
                                                                guide,
                                                         *args, **kwargs)
