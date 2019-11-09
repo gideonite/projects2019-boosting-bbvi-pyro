@@ -35,7 +35,7 @@ data = torch.tensor([4.0, 4.2, 3.9, 4.1, 3.8, 3.5, 4.3])
 
 def guide(data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([-1.0]))
+    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([1.0]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
 @config_enumerate
@@ -57,7 +57,7 @@ def approximation(data, components, weights):
 
 def dummy_approximation(data):
     variance_q = pyro.param('variance_0', torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_0', torch.tensor([1.0]))
+    mu_q = pyro.param('mu_0', torch.tensor([20.0]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
 def relbo(model, guide, *args, **kwargs):
@@ -111,7 +111,7 @@ def boosting_bbvi():
         wrapped_guide(data)
         print(pyro.get_param_store().named_parameters())
 
-        adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.001, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
