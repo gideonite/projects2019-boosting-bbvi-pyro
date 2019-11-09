@@ -77,7 +77,7 @@ def relbo(model, guide, *args, **kwargs):
 
     # This is how we computed the ELBO before using TraceEnum_ELBO:
     # elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
-    
+
     loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
                                                                guide,
                                                         *args, **kwargs)
@@ -113,7 +113,7 @@ def boosting_bbvi():
         wrapped_guide(data)
         print(pyro.get_param_store().named_parameters())
 
-        adam_params = {"lr": 0.001, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.002, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
