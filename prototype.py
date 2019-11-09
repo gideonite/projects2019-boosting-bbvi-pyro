@@ -25,7 +25,6 @@ n_steps = 2 if smoke_test else 1200
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
-assert pyro.__version__.startswith('0.4.1')
 pyro.enable_validation(True)
 
 # clear the param store in case we're in a REPL
