@@ -22,7 +22,7 @@ PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
 smoke_test = ('CI' in os.environ)
-n_steps = 2 if smoke_test else 2000
+n_steps = 2 if smoke_test else 5000
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
@@ -35,7 +35,7 @@ data = torch.tensor([4.0, 4.2, 3.9, 4.1, 3.8, 3.5, 4.3])
 
 def guide(data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([1.0]))
+    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([-1.0]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
 @config_enumerate
@@ -52,13 +52,12 @@ def model(data):
 
 @config_enumerate
 def approximation(data, components, weights):
-        for i in pyro.plate('data', len(data)):
-            assignment = pyro.sample('assignment_{}'.format(i), dist.Categorical(weights))
-            distribution = components[assignment](data)
+    assignment = pyro.sample('assignment', dist.Categorical(weights))
+    distribution = components[assignment](data)
 
 def dummy_approximation(data):
     variance_q = pyro.param('variance_0', torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_0', torch.tensor([20.0]))
+    mu_q = pyro.param('mu_0', torch.tensor([1.0]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
 def relbo(model, guide, *args, **kwargs):
@@ -73,7 +72,7 @@ def relbo(model, guide, *args, **kwargs):
     #print(model_trace.nodes['obs_1'])
 
 
-    approximation_trace = trace(replay(block(approximation, expose_fn= lambda site: 'obs_' in site['name']), guide_trace)).get_trace(*args, **kwargs)
+    approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
 
     elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
@@ -81,6 +80,8 @@ def relbo(model, guide, *args, **kwargs):
                                                                guide,
                                                         *args, **kwargs)
 
+    # print(loss_fn)
+    # print(approximation_trace.log_prob_sum())
     elbo = -loss_fn - approximation_trace.log_prob_sum()
     # Return (-elbo) since by convention we do gradient descent on a loss and
     # the ELBO is a lower bound that needs to be maximized.
@@ -110,7 +111,7 @@ def boosting_bbvi():
         wrapped_guide(data)
         print(pyro.get_param_store().named_parameters())
 
-        adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
@@ -145,6 +146,13 @@ def boosting_bbvi():
 
         wrapped_approximation = partial(approximation, components=components, weights=weights)
 
+        scale = pyro.param("variance_{}".format(t)).item()
+        scales.append(scale)
+        loc = pyro.param("mu_{}".format(t)).item()
+        locs.append(loc)
+        print('mu = {}'.format(loc))
+        print('variance = {}'.format(scale))
+
     pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
     for name, grad_norms in gradient_norms.items():
         pyplot.plot(grad_norms, label=name)
@@ -155,6 +163,22 @@ def boosting_bbvi():
         pyplot.title('Gradient norms during SVI');
     pyplot.show()  
 
+    print(weights)
+    print(locs)
+    print(scales)
+
+    X = np.arange(-10, 10, 0.1)
+    Y1 = weights[1].item() * scipy.stats.norm.pdf((X - locs[1]) / scales[1])
+    Y2 = weights[2].item() * scipy.stats.norm.pdf((X - locs[2]) / scales[2])
+
+    pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
+    pyplot.plot(X, Y1, 'r-')
+    pyplot.plot(X, Y2, 'b-')
+    pyplot.plot(X, Y1 + Y2, 'k--')
+    pyplot.plot(data.data.numpy(), np.zeros(len(data)), 'k*')
+    pyplot.title('Approximation of posterior over mu')
+    pyplot.ylabel('probability density');
+    pyplot.show()
 
 if __name__ == '__main__':
   boosting_bbvi()
