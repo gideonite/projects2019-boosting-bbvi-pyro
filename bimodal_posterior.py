@@ -4,7 +4,7 @@ import torch
 import torch.distributions.constraints as constraints
 import pyro
 from pyro.optim import Adam, SGD
-from pyro.infer import SVI, Trace_ELBO, config_enumerate
+from pyro.infer import SVI, Trace_ELBO, config_enumerate, TraceEnum_ELBO
 import pyro.distributions as dist
 from pyro.infer.autoguide import AutoDelta
 from pyro import poutine    
@@ -35,7 +35,7 @@ data = torch.tensor([4.0, 4.2, 3.9, 4.1, 3.8, 3.5, 4.3])
 
 def guide(data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([1.0]))
+    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([0.5]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
 @config_enumerate
@@ -182,5 +182,50 @@ def boosting_bbvi():
     pyplot.ylabel('probability density');
     pyplot.show()
 
+def run_standard_svi():
+
+    adam_params = {"lr": 0.002, "betas": (0.90, 0.999)}
+    optimizer = Adam(adam_params)
+    gradient_norms = defaultdict(list)
+    losses = []
+    wrapped_guide = partial(guide, index=0)
+    wrapped_guide(data)
+    for name, value in pyro.get_param_store().named_parameters():
+        if not name in gradient_norms:
+            value.register_hook(lambda g, name=name: gradient_norms[name].append(g.norm().item()))
+    
+
+    svi = SVI(model, wrapped_guide, optimizer, loss=Trace_ELBO())
+    for step in range(n_steps):
+        loss = svi.step(data)
+        losses.append(loss)
+
+
+    pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
+    for name, grad_norms in gradient_norms.items():
+        pyplot.plot(grad_norms, label=name)
+        pyplot.xlabel('iters')
+        pyplot.ylabel('gradient norm')
+        # pyplot.yscale('log')
+        pyplot.legend(loc='best')
+        pyplot.title('Gradient norms during SVI');
+    pyplot.show()  
+
+    scale = pyro.param("variance_{}".format(0)).item()
+    loc = pyro.param("mu_{}".format(0)).item()
+    X = np.arange(-10, 10, 0.1)
+    Y1 = scipy.stats.norm.pdf((X - loc) / scale)
+
+    print('Resulting Mu: ', loc)
+    print('Resulting Variance: ', scale)
+    
+    pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
+    pyplot.plot(X, Y1, 'r-')
+    pyplot.plot(data.data.numpy(), np.zeros(len(data)), 'k*')
+    pyplot.title('Standard SVI result')
+    pyplot.ylabel('probability density');
+    pyplot.show()
+
+
 if __name__ == '__main__':
-  boosting_bbvi()
+  run_standard_svi()
