@@ -46,9 +46,9 @@ def model(data):
     mu = pyro.sample('mu', dist.Normal(prior_mu, prior_variance))
     variance = torch.tensor([1.])
 
-    for i in pyro.plate('data', len(data)):
+    with pyro.plate('data', len(data)):
         # Local variables.
-        pyro.sample('obs_{}'.format(i), dist.Normal(mu*mu, variance), obs=data[i])
+        pyro.sample('obs', dist.Normal(mu*mu, variance), obs=data)
 
 @config_enumerate
 def approximation(data, components, weights):
