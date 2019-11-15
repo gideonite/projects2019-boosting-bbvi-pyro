@@ -34,21 +34,21 @@ pyro.clear_param_store()
 data = torch.tensor([4.0, 4.2, 3.9, 4.1, 3.8, 3.5, 4.3])
 
 def guide(data, index):
-    variance_q = pyro.param('variance_{}'.format(index), torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([1.0]))
-    pyro.sample("mu", dist.Normal(mu_q, variance_q))
+    scale_q = pyro.param('scale_{}'.format(index), torch.tensor([1.0]), constraints.positive)
+    loc_q = pyro.param('loc_{}'.format(index), torch.tensor([1.0]))
+    pyro.sample('loc', dist.Normal(loc_q, scale_q))
 
 @config_enumerate
 def model(data):
     # Global variables.
-    prior_mu = torch.tensor([0.])
-    prior_variance = torch.tensor([5.])
-    mu = pyro.sample('mu', dist.Normal(prior_mu, prior_variance))
-    variance = torch.tensor([1.])
+    prior_loc = torch.tensor([0.])
+    prior_scale = torch.tensor([5.])
+    loc = pyro.sample('loc', dist.Normal(prior_loc, prior_scale))
+    scale = torch.tensor([1.])
 
     with pyro.plate('data', len(data)):
         # Local variables.
-        pyro.sample('obs', dist.Normal(mu*mu, variance), obs=data)
+        pyro.sample('obs', dist.Normal(loc**2, scale), obs=data)
 
 @config_enumerate
 def approximation(data, components, weights):
@@ -56,9 +56,9 @@ def approximation(data, components, weights):
     distribution = components[assignment](data)
 
 def dummy_approximation(data):
-    variance_q = pyro.param('variance_0', torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_0', torch.tensor([20.0]))
-    pyro.sample("mu", dist.Normal(mu_q, variance_q))
+    scale_q = pyro.param('scale_0', torch.tensor([1.0]), constraints.positive)
+    loc_q = pyro.param('loc_0', torch.tensor([20.0]))
+    pyro.sample('loc', dist.Normal(loc_q, scale_q))
 
 def relbo(model, guide, *args, **kwargs):
 
@@ -72,7 +72,9 @@ def relbo(model, guide, *args, **kwargs):
     #print(model_trace.nodes['obs_1'])
 
 
-    approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
+    approximation_trace = trace(
+            replay(block(approximation, expose=['loc']), guide_trace)
+        ).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
 
     # This is how we computed the ELBO before using TraceEnum_ELBO:
@@ -124,15 +126,15 @@ def boosting_bbvi():
             loss = svi.step(data, approximation=wrapped_approximation)
             losses.append(loss)
 
-            if PRINT_INTERMEDIATE_LATENT_VALUES:
-                print('Loss: {}'.format(loss))
-                variance = pyro.param("variance_{}".format(t)).item()
-                mu = pyro.param("mu_{}".format(t)).item()
-                print('mu = {}'.format(mu))
-                print('variance = {}'.format(variance))
-
             if step % 100 == 0:
-                print('.', end=' ')
+                if PRINT_INTERMEDIATE_LATENT_VALUES:
+                    print('Loss: {}'.format(loss))
+                    scale = pyro.param("scale_{}".format(t)).item()
+                    loc = pyro.param("loc_{}".format(t)).item()
+                    print('loc = {}'.format(loc))
+                    print('scale = {}'.format(scale))
+                else:
+                    print('.', end=' ')
 
         pyplot.plot(range(len(losses)), losses)
         pyplot.xlabel('Update Steps')
@@ -148,12 +150,12 @@ def boosting_bbvi():
 
         wrapped_approximation = partial(approximation, components=components, weights=weights)
 
-        scale = pyro.param("variance_{}".format(t)).item()
+        scale = pyro.param("scale_{}".format(t)).item()
         scales.append(scale)
-        loc = pyro.param("mu_{}".format(t)).item()
+        loc = pyro.param("loc_{}".format(t)).item()
         locs.append(loc)
-        print('mu = {}'.format(loc))
-        print('variance = {}'.format(scale))
+        print('loc = {}'.format(loc))
+        print('scale = {}'.format(scale))
 
     pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
     for name, grad_norms in gradient_norms.items():
@@ -163,22 +165,23 @@ def boosting_bbvi():
         # pyplot.yscale('log')
         pyplot.legend(loc='best')
         pyplot.title('Gradient norms during SVI');
-    pyplot.show()  
+    pyplot.show()
 
     print(weights)
     print(locs)
     print(scales)
 
-    X = np.arange(-10, 10, 0.1)
-    Y1 = weights[1].item() * scipy.stats.norm.pdf((X - locs[1]) / scales[1])
-    Y2 = weights[2].item() * scipy.stats.norm.pdf((X - locs[2]) / scales[2])
-
     pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
-    pyplot.plot(X, Y1, 'r-')
-    pyplot.plot(X, Y2, 'b-')
-    pyplot.plot(X, Y1 + Y2, 'k--')
+    X = np.arange(-10, 10, 0.1)
+    Y_all = 0.0
+    for t in range(1, n_iterations + 1):
+        Y = weights[t].item() * scipy.stats.norm.pdf((X - locs[t]) / scales[t])
+        Y_all = Y_all + Y
+
+        pyplot.plot(X, Y)
+    pyplot.plot(X, Y_all, 'k--')
     pyplot.plot(data.data.numpy(), np.zeros(len(data)), 'k*')
-    pyplot.title('Approximation of posterior over mu')
+    pyplot.title('Approximation of posterior over loc')
     pyplot.ylabel('probability density');
     pyplot.show()
 
