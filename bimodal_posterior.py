@@ -35,7 +35,7 @@ data = torch.tensor([4.0, 4.2, 3.9, 4.1, 3.8, 3.5, 4.3])
 
 def guide(data, index):
     scale_q = pyro.param('scale_{}'.format(index), torch.tensor([1.0]), constraints.positive)
-    loc_q = pyro.param('loc_{}'.format(index), torch.tensor([1.0]))
+    loc_q = pyro.param('loc_{}'.format(index), torch.tensor([0.0]))
     pyro.sample('loc', dist.Normal(loc_q, scale_q))
 
 @config_enumerate
@@ -99,7 +99,7 @@ def relbo(model, guide, *args, **kwargs):
 
 
 def boosting_bbvi():
-    n_iterations = 2
+    n_iterations = 5
 
     components = []
     weights = torch.tensor([])
@@ -119,7 +119,7 @@ def boosting_bbvi():
         wrapped_guide(data)
         print(pyro.get_param_store().named_parameters())
 
-        adam_params = {"lr": 0.002, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.01, "betas": (0.99, 0.99)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
