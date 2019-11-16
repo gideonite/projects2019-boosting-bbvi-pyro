@@ -75,18 +75,26 @@ def relbo(model, guide, *args, **kwargs):
     # We will accumulate the various terms of the ELBO in `elbo`.
 
     # This is how we computed the ELBO before using TraceEnum_ELBO:
-    # elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
+    elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
 
-    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
-                                                               guide,
-                                                        *args, **kwargs)
+    #loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
+    #                                                           guide,
+    #                                                    *args, **kwargs)
+    #loss_fn = pyro.infer.Trace_ELBO().differentiable_loss(
+    #        model, guide, *args, **kwargs)
 
     # print(loss_fn)
     # print(approximation_trace.log_prob_sum())
-    elbo = -loss_fn - approximation_trace.log_prob_sum()
+    #elbo = -loss_fn - approximation_trace.log_prob_sum()
+
+    if PRINT_TRACES:
+        print(
+                model_trace.log_prob_sum(),
+                guide_trace.log_prob_sum(),
+                approximation_trace.log_prob_sum())
+
     # Return (-elbo) since by convention we do gradient descent on a loss and
     # the ELBO is a lower bound that needs to be maximized.
-
     return -elbo
 
 
