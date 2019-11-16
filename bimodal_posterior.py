@@ -52,13 +52,10 @@ def model(data):
 
 @config_enumerate
 def approximation(data, components, weights):
-    assignment = pyro.sample('assignment', dist.Categorical(weights))
-    distribution = components[assignment](data)
-
-def dummy_approximation(data):
-    scale_q = pyro.param('scale_0', torch.tensor([1.0]), constraints.positive)
-    loc_q = pyro.param('loc_0', torch.tensor([20.0]))
-    pyro.sample('loc', dist.Normal(loc_q, scale_q))
+    if len(weights) > 0:
+        assignment = pyro.sample('assignment', dist.Categorical(weights))
+        distribution = components[assignment](data)
+    return
 
 def relbo(model, guide, *args, **kwargs):
 
@@ -96,17 +93,16 @@ def relbo(model, guide, *args, **kwargs):
 def boosting_bbvi():
     n_iterations = 2
 
-    initial_approximation = dummy_approximation
-    components = [initial_approximation]
-    weights = torch.tensor([1.])
+    components = []
+    weights = torch.tensor([])
     wrapped_approximation = partial(approximation, components=components,
                                     weights=weights)
-
-    locs = [0]
-    scales = [0]
+    locs = []
+    scales = []
 
     gradient_norms = defaultdict(list)
-    for t in range(1, n_iterations + 1):
+    for t in range(n_iterations):
+        print(weights)
         # setup the inference algorithm
         wrapped_guide = partial(guide, index=t)
         # do gradient steps
@@ -139,11 +135,11 @@ def boosting_bbvi():
         pyplot.plot(range(len(losses)), losses)
         pyplot.xlabel('Update Steps')
         pyplot.ylabel('-ELBO')
-        pyplot.title('-ELBO against time for component {}'.format(t));
+        pyplot.title('-ELBO against time for component {}'.format(t+1));
         pyplot.show()
 
         components.append(wrapped_guide)
-        new_weight = 2 / (t + 1)
+        new_weight = 2 / (t + 2)
 
         weights = weights * (1-new_weight)
         weights = torch.cat((weights, torch.tensor([new_weight])))
@@ -174,7 +170,7 @@ def boosting_bbvi():
     pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
     X = np.arange(-10, 10, 0.1)
     Y_all = 0.0
-    for t in range(1, n_iterations + 1):
+    for t in range(n_iterations):
         Y = weights[t].item() * scipy.stats.norm.pdf((X - locs[t]) / scales[t])
         Y_all = Y_all + Y
 
