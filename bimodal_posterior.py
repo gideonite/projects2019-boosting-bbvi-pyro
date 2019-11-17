@@ -17,7 +17,7 @@ from collections import defaultdict
 import matplotlib
 from matplotlib import pyplot
 
-PRINT_INTERMEDIATE_LATENT_VALUES = True
+PRINT_INTERMEDIATE_LATENT_VALUES = False
 PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
@@ -33,9 +33,13 @@ pyro.clear_param_store()
 
 data = torch.tensor([4.0, 4.2, 3.9, 4.1, 3.8, 3.5, 4.3])
 
+model_log_prob = []
+guide_log_prob = []
+approximation_log_prob = []
+
 def guide(data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.tensor([1.0]), constraints.positive)
-    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([0.5]))
+    mu_q = pyro.param('mu_{}'.format(index), torch.tensor([1.0]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
 @config_enumerate
@@ -75,6 +79,10 @@ def relbo(model, guide, *args, **kwargs):
     approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
 
+    guide_log_prob.append(guide_trace.log_prob_sum())
+    model_log_prob.append(model_trace.log_prob_sum())
+    approximation_log_prob.append(approximation_trace.log_prob_sum())
+
     # This is how we computed the ELBO before using TraceEnum_ELBO:
     # elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
 
@@ -92,7 +100,7 @@ def relbo(model, guide, *args, **kwargs):
 
 
 def boosting_bbvi():
-    n_iterations = 2
+    n_iterations = 6
 
     initial_approximation = dummy_approximation
     components = [initial_approximation]
@@ -118,6 +126,14 @@ def boosting_bbvi():
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
                 value.register_hook(lambda g, name=name: gradient_norms[name].append(g.norm().item()))
+        
+        global model_log_prob
+        model_log_prob = []
+        global guide_log_prob
+        guide_log_prob = []
+        global approximation_log_prob
+        approximation_log_prob = []
+
 
         svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
         for step in range(n_steps):
@@ -138,6 +154,16 @@ def boosting_bbvi():
         pyplot.xlabel('Update Steps')
         pyplot.ylabel('-ELBO')
         pyplot.title('-ELBO against time for component {}'.format(t));
+        pyplot.show()
+
+        pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
+        pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
+        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
+        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
+        pyplot.xlabel('Update Steps')
+        pyplot.ylabel('Log Prob')
+        pyplot.title('RELBO components throughout SVI'.format(t));
+        pyplot.legend()
         pyplot.show()
 
         components.append(wrapped_guide)
@@ -170,13 +196,13 @@ def boosting_bbvi():
     print(scales)
 
     X = np.arange(-10, 10, 0.1)
-    Y1 = weights[1].item() * scipy.stats.norm.pdf((X - locs[1]) / scales[1])
-    Y2 = weights[2].item() * scipy.stats.norm.pdf((X - locs[2]) / scales[2])
-
     pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
-    pyplot.plot(X, Y1, 'r-')
-    pyplot.plot(X, Y2, 'b-')
-    pyplot.plot(X, Y1 + Y2, 'k--')
+    total_approximation = np.zeros(X.shape)
+    for i in range(1, n_iterations + 1):
+        Y = weights[i].item() * scipy.stats.norm.pdf((X - locs[i]) / scales[i])    
+        pyplot.plot(X, Y)
+        total_approximation += Y
+    pyplot.plot(X, total_approximation)
     pyplot.plot(data.data.numpy(), np.zeros(len(data)), 'k*')
     pyplot.title('Approximation of posterior over mu')
     pyplot.ylabel('probability density');
@@ -228,4 +254,4 @@ def run_standard_svi():
 
 
 if __name__ == '__main__':
-  run_standard_svi()
+  boosting_bbvi()
