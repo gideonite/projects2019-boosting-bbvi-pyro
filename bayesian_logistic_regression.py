@@ -16,6 +16,8 @@ from pyro.infer.autoguide import AutoDelta
 from collections import defaultdict
 import matplotlib
 from matplotlib import pyplot
+from pyro.infer import MCMC, NUTS
+import pandas as pd
 
 
 PRINT_INTERMEDIATE_LATENT_VALUES = False
@@ -94,8 +96,16 @@ def relbo(model, guide, *args, **kwargs):
     return -elbo
 
 
-def boosting_bbvi():
+# Utility function to print latent sites' quantile information.
+def summary(samples):
+    site_stats = {}
+    for site_name, values in samples.items():
+        marginal_site = pd.DataFrame(values)
+        describe = marginal_site.describe(percentiles=[.05, 0.25, 0.5, 0.75, 0.95]).transpose()
+        site_stats[site_name] = describe[["mean", "std", "5%", "25%", "50%", "75%", "95%"]]
+    return site_stats
 
+def load_data():
     npz_train_file = np.load('ds1.100_train.npz')
     npz_test_file = np.load('ds1.100_test.npz')
 
@@ -107,6 +117,11 @@ def boosting_bbvi():
     y_test[y_test == -1] = 0
     n_iterations = 2
 
+    return X_train, y_train, X_test, y_test
+
+def boosting_bbvi():
+
+    X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
     initial_approximation = dummy_approximation
     components = [initial_approximation]
@@ -229,6 +244,19 @@ def boosting_bbvi():
     # pyplot.ylabel('probability density');
     # pyplot.show()
 
+def run_mcmc():
+
+    X_train, y_train, X_test, y_test = load_data()
+    nuts_kernel = NUTS(logistic_regression_model)
+
+    mcmc = MCMC(nuts_kernel, num_samples=200, warmup_steps=100)
+    mcmc.run(y_train, X_train)
+
+    hmc_samples = {k: v.detach().cpu().numpy() for k, v in mcmc.get_samples().items()}
+
+    for site, values in summary(hmc_samples).items():
+        print("Site: {}".format(site))
+        print(values, "\n")
 
 if __name__ == '__main__':
-  boosting_bbvi()
+  run_mcmc()
