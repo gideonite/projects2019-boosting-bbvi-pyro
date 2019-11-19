@@ -23,7 +23,7 @@ PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
 smoke_test = ('CI' in os.environ)
-n_steps = 2 if smoke_test else 1000
+n_steps = 2 if smoke_test else 5000
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
@@ -38,11 +38,12 @@ approximation_log_prob = []
 
 def guide(observations, input_data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
-    mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
+    #variance_q = torch.eye(input_data.shape[1])
+    mu_q = pyro.param('mu_{}'.format(index), 20*torch.ones(input_data.shape[1]))
     pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
 
 def logistic_regression_model(observations, input_data):
-    w = pyro.sample('w', dist.MultivariateNormal(20*torch.ones(input_data.shape[1]), torch.eye(input_data.shape[1])))
+    w = pyro.sample('w', dist.MultivariateNormal(torch.ones(input_data.shape[1]), torch.eye(input_data.shape[1])))
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(torch.tensor(input_data).double(),torch.tensor(w).double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
