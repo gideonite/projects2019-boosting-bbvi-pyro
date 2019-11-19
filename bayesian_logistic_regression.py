@@ -18,6 +18,7 @@ import matplotlib
 from matplotlib import pyplot
 from pyro.infer import MCMC, NUTS
 import pandas as pd
+import pickle
 
 
 PRINT_INTERMEDIATE_LATENT_VALUES = False
@@ -41,9 +42,10 @@ approximation_log_prob = []
 def guide(observations, input_data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
     #variance_q = torch.eye(input_data.shape[1])
-    mu_q = pyro.param('mu_{}'.format(index), 20*torch.ones(input_data.shape[1]))
+    mu_q = pyro.param('mu_{}'.format(index), torch.rand(input_data.shape[1]))
     pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
 
+@config_enumerate
 def logistic_regression_model(observations, input_data):
     w = pyro.sample('w', dist.MultivariateNormal(torch.ones(input_data.shape[1]), torch.eye(input_data.shape[1])))
     with pyro.plate("data", input_data.shape[0]):
@@ -70,7 +72,9 @@ def relbo(model, guide, *args, **kwargs):
     guide_trace = trace(guide).get_trace(*args, **kwargs)
     #print(guide_trace.nodes['obs_1'])
     model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
-    #print(model_trace.nodes['obs_1'])
+
+    #print(model_trace.nodes['obs'])
+
 
 
     approximation_trace = trace(replay(block(approximation, expose=['w']), guide_trace)).get_trace(*args, **kwargs)
@@ -83,13 +87,13 @@ def relbo(model, guide, *args, **kwargs):
     # This is how we computed the ELBO before using TraceEnum_ELBO:
     elbo = model_trace.log_prob_sum() - relbo_lambda * guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
 
-    # loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
-    #                                                            guide,
-    #                                                     *args, **kwargs)
+    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
+                                                                guide,
+                                                         *args, **kwargs)
 
     # print(loss_fn)
     # print(approximation_trace.log_prob_sum())
-    #elbo = -loss_fn - approximation_trace.log_prob_sum()
+    elbo = -loss_fn - approximation_trace.log_prob_sum()
     # Return (-elbo) since by convention we do gradient descent on a loss and
     # the ELBO is a lower bound that needs to be maximized.
 
@@ -115,12 +119,12 @@ def load_data():
     X_test = torch.tensor(npz_test_file['X'])
     y_test = torch.tensor(npz_test_file['y'])
     y_test[y_test == -1] = 0
-    n_iterations = 2
 
     return X_train, y_train, X_test, y_test
 
 def boosting_bbvi():
 
+    n_iterations = 1
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
     initial_approximation = dummy_approximation
@@ -172,11 +176,11 @@ def boosting_bbvi():
             if step % 100 == 0:
                 print('.', end=' ')
 
-        pyplot.plot(range(len(losses)), losses)
-        pyplot.xlabel('Update Steps')
-        pyplot.ylabel('-ELBO')
-        pyplot.title('-ELBO against time for component {}'.format(t));
-        pyplot.show()
+        # pyplot.plot(range(len(losses)), losses)
+        # pyplot.xlabel('Update Steps')
+        # pyplot.ylabel('-ELBO')
+        # pyplot.title('-ELBO against time for component {}'.format(t));
+        # pyplot.show()
 
         pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
         pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
@@ -227,22 +231,14 @@ def boosting_bbvi():
     pyplot.xlabel('Approximation components')
     pyplot.ylabel('Log probability')
     pyplot.show()
-    # print(weights)
-    # print(locs)
-    # print(scales)
 
-    # X = np.arange(-10, 10, 0.1)
-    # pyplot.figure(figsize=(10, 4), dpi=100).set_facecolor('white')
-    # total_approximation = np.zeros(X.shape)
-    # for i in range(1, n_iterations + 1):
-    #     Y = weights[i].item() * scipy.stats.norm.pdf((X - locs[i]) / scales[i])    
-    #     pyplot.plot(X, Y)
-    #     total_approximation += Y
-    # pyplot.plot(X, total_approximation)
-    # pyplot.plot(data.data.numpy(), np.zeros(len(data)), 'k*')
-    # pyplot.title('Approximation of posterior over mu with lambda={}'.format(relbo_lambda))
-    # pyplot.ylabel('probability density');
-    # pyplot.show()
+    for i in range(1, n_iterations + 1):
+        mu = pyro.param('mu_{}'.format(i))
+        sigma = pyro.param('variance_{}'.format(i))
+        print('Mu: ')
+        print(mu)
+        print('Sigma: ')
+        print(sigma)
 
 def run_mcmc():
 
@@ -254,9 +250,12 @@ def run_mcmc():
 
     hmc_samples = {k: v.detach().cpu().numpy() for k, v in mcmc.get_samples().items()}
 
+    with open('hmc_samples.pkl', 'wb') as outfile:
+        pickle.dump(hmc_samples, outfile)
+
     for site, values in summary(hmc_samples).items():
         print("Site: {}".format(site))
         print(values, "\n")
 
 if __name__ == '__main__':
-  run_mcmc()
+  boosting_bbvi()
