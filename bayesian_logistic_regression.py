@@ -47,7 +47,7 @@ def guide(observations, input_data, index):
 
 @config_enumerate
 def logistic_regression_model(observations, input_data):
-    w = pyro.sample('w', dist.MultivariateNormal(torch.ones(input_data.shape[1]), torch.eye(input_data.shape[1])))
+    w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.eye(input_data.shape[1])))
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(torch.tensor(input_data).double(),torch.tensor(w).double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
