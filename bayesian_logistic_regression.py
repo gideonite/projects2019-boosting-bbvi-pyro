@@ -19,6 +19,8 @@ from matplotlib import pyplot
 from pyro.infer import MCMC, NUTS
 import pandas as pd
 import pickle
+from pyro.infer.autoguide import AutoDiagonalNormal
+
 
 
 PRINT_INTERMEDIATE_LATENT_VALUES = False
@@ -26,7 +28,7 @@ PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
 smoke_test = ('CI' in os.environ)
-n_steps = 2 if smoke_test else 3000
+n_steps = 2 if smoke_test else 5000
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
@@ -42,14 +44,14 @@ approximation_log_prob = []
 def guide(observations, input_data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
     #variance_q = torch.eye(input_data.shape[1])
-    mu_q = pyro.param('mu_{}'.format(index), torch.rand(input_data.shape[1]))
+    mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
     pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
 
 @config_enumerate
 def logistic_regression_model(observations, input_data):
     w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.eye(input_data.shape[1])))
     with pyro.plate("data", input_data.shape[0]):
-      sigmoid = torch.sigmoid(torch.matmul(torch.tensor(input_data).double(),torch.tensor(w).double()))
+      sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
 
 @config_enumerate
@@ -58,7 +60,7 @@ def approximation(observations, input_data, components, weights):
     distribution = components[assignment](observations, input_data)
 
 def dummy_approximation(observations, input_data):
-    variance_q = pyro.param('variance_0', torch.eye(input_data.shape[1]))
+    variance_q = pyro.param('variance_0', torch.eye(input_data.shape[1]), constraints.positive)
     mu_q = pyro.param('mu_0', 20*torch.ones(input_data.shape[1]))
     pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
 
@@ -113,18 +115,18 @@ def load_data():
     npz_train_file = np.load('ds1.100_train.npz')
     npz_test_file = np.load('ds1.100_test.npz')
 
-    X_train = torch.tensor(npz_train_file['X'])
-    y_train = torch.tensor(npz_train_file['y'])
+    X_train = torch.tensor(npz_train_file['X']).double()
+    y_train = torch.tensor(npz_train_file['y']).double()
     y_train[y_train == -1] = 0
-    X_test = torch.tensor(npz_test_file['X'])
-    y_test = torch.tensor(npz_test_file['y'])
+    X_test = torch.tensor(npz_test_file['X']).double()
+    y_test = torch.tensor(npz_test_file['y']).double()
     y_test[y_test == -1] = 0
 
     return X_train, y_train, X_test, y_test
 
 def boosting_bbvi():
 
-    n_iterations = 1
+    n_iterations = 2
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
     initial_approximation = dummy_approximation
@@ -147,7 +149,7 @@ def boosting_bbvi():
         wrapped_guide(y_train, X_train)
         print(pyro.get_param_store().named_parameters())
 
-        adam_params = {"lr": 0.001, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
@@ -267,23 +269,31 @@ def run_svi():
     optimizer = Adam(adam_params)
 
     # setup the inference algorithm
-    wrapped_guide = partial(guide, index=0)
+    #wrapped_guide = partial(guide, index=0)
+    wrapped_guide = AutoDiagonalNormal(logistic_regression_model)
     svi = SVI(logistic_regression_model, wrapped_guide, optimizer, loss=Trace_ELBO())
-
+    losses = []
+    
     # do gradient steps
     for step in range(n_steps):
-        svi.step(y_train, X_train)
+        loss = svi.step(y_train, X_train)
+        losses.append(loss)
         if step % 100 == 0:
             print('.', end='')
 
-    for i in range(0, n_iterations):
-        mu = pyro.param('mu_{}'.format(i))
-        sigma = pyro.param('variance_{}'.format(i))
-        print('Mu_{}: '.format(i))
-        print(mu)
-        print('Sigma{}: '.format(i))
-        print(sigma)
+    # for i in range(0, n_iterations):
+    #     mu = pyro.param('mu_{}'.format(i))
+    #     sigma = pyro.param('variance_{}'.format(i))
+    #     print('Mu_{}: '.format(i))
+    #     print(mu)
+    #     print('Sigma{}: '.format(i))
+    #     print(sigma)
 
+    pyplot.plot(range(len(losses)), losses)
+    pyplot.xlabel('Update Steps')
+    pyplot.ylabel('-ELBO')
+    pyplot.title('-ELBO against time for component {}'.format(1));
+    pyplot.show()
 
 if __name__ == '__main__':
-  run_svi()
+  boosting_bbvi()
