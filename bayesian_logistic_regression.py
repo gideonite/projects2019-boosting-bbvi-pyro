@@ -26,7 +26,7 @@ PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
 smoke_test = ('CI' in os.environ)
-n_steps = 2 if smoke_test else 5000
+n_steps = 2 if smoke_test else 3000
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
@@ -147,7 +147,7 @@ def boosting_bbvi():
         wrapped_guide(y_train, X_train)
         print(pyro.get_param_store().named_parameters())
 
-        adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.001, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
@@ -235,9 +235,9 @@ def boosting_bbvi():
     for i in range(1, n_iterations + 1):
         mu = pyro.param('mu_{}'.format(i))
         sigma = pyro.param('variance_{}'.format(i))
-        print('Mu: ')
+        print('Mu_{}: '.format(i))
         print(mu)
-        print('Sigma: ')
+        print('Sigma{}: '.format(i))
         print(sigma)
 
 def run_mcmc():
@@ -257,5 +257,33 @@ def run_mcmc():
         print("Site: {}".format(site))
         print(values, "\n")
 
+
+def run_svi():
+    # setup the optimizer
+    X_train, y_train, X_test, y_test = load_data()
+    n_steps = 5000
+    n_iterations = 1
+    adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
+    optimizer = Adam(adam_params)
+
+    # setup the inference algorithm
+    wrapped_guide = partial(guide, index=0)
+    svi = SVI(logistic_regression_model, wrapped_guide, optimizer, loss=Trace_ELBO())
+
+    # do gradient steps
+    for step in range(n_steps):
+        svi.step(y_train, X_train)
+        if step % 100 == 0:
+            print('.', end='')
+
+    for i in range(0, n_iterations):
+        mu = pyro.param('mu_{}'.format(i))
+        sigma = pyro.param('variance_{}'.format(i))
+        print('Mu_{}: '.format(i))
+        print(mu)
+        print('Sigma{}: '.format(i))
+        print(sigma)
+
+
 if __name__ == '__main__':
-  boosting_bbvi()
+  run_svi()
