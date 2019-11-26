@@ -67,6 +67,7 @@ def dummy_approximation(data):
 def relbo(model, guide, *args, **kwargs):
 
     approximation = kwargs.pop('approximation', None)
+    relbo_lambda = kwargs.pop('relbo_lambda', None)
     # Run the guide with the arguments passed to SVI.step() and trace the execution,
     # i.e. record all the calls to Pyro primitives like sample() and param().
     #print("enter relbo")
@@ -84,15 +85,15 @@ def relbo(model, guide, *args, **kwargs):
     approximation_log_prob.append(approximation_trace.log_prob_sum())
 
     # This is how we computed the ELBO before using TraceEnum_ELBO:
-    # elbo = model_trace.log_prob_sum() - guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
+    elbo = model_trace.log_prob_sum() - relbo_lambda * guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
 
-    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
-                                                               guide,
-                                                        *args, **kwargs)
+    # loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
+    #                                                            guide,
+    #                                                     *args, **kwargs)
 
     # print(loss_fn)
     # print(approximation_trace.log_prob_sum())
-    elbo = -loss_fn - approximation_trace.log_prob_sum()
+    #elbo = -loss_fn - approximation_trace.log_prob_sum()
     # Return (-elbo) since by convention we do gradient descent on a loss and
     # the ELBO is a lower bound that needs to be maximized.
 
@@ -102,6 +103,7 @@ def relbo(model, guide, *args, **kwargs):
 def boosting_bbvi():
     n_iterations = 6
 
+    relbo_lambda = 1
     initial_approximation = dummy_approximation
     components = [initial_approximation]
     weights = torch.tensor([1.])
@@ -112,6 +114,9 @@ def boosting_bbvi():
     scales = [0]
 
     gradient_norms = defaultdict(list)
+    duality_gap = []
+    entropies = []
+    model_log_likelihoods = []
     for t in range(1, n_iterations + 1):
         # setup the inference algorithm
         wrapped_guide = partial(guide, index=t)
@@ -137,7 +142,7 @@ def boosting_bbvi():
 
         svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
         for step in range(n_steps):
-            loss = svi.step(data, approximation=wrapped_approximation)
+            loss = svi.step(data, approximation=wrapped_approximation, relbo_lambda=relbo_lambda)
             losses.append(loss)
 
             if PRINT_INTERMEDIATE_LATENT_VALUES:
@@ -174,6 +179,22 @@ def boosting_bbvi():
 
         wrapped_approximation = partial(approximation, components=components, weights=weights)
 
+        e_log_p = 0
+        n_samples = 50
+        entropy = 0
+        model_log_likelihood = 0
+        elbo = 0
+        for i in range(n_samples):
+            qt_trace = trace(wrapped_approximation).get_trace(data)
+            replayed_model_trace = trace(replay(model, qt_trace)).get_trace(data)
+            model_log_likelihood += replayed_model_trace.log_prob_sum()
+            entropy -= qt_trace.log_prob_sum()
+            elbo = elbo + replayed_model_trace.log_prob_sum() - qt_trace.log_prob_sum()
+
+        duality_gap.append(elbo/n_samples)
+        model_log_likelihoods.append(model_log_likelihood/n_samples)
+        entropies.append(entropy/n_samples)
+
         scale = pyro.param("variance_{}".format(t)).item()
         scales.append(scale)
         loc = pyro.param("mu_{}".format(t)).item()
@@ -191,6 +212,15 @@ def boosting_bbvi():
         pyplot.title('Gradient norms during SVI');
     pyplot.show()  
 
+
+    pyplot.plot(range(1, len(duality_gap) + 1), duality_gap, label='ELBO')
+    pyplot.plot(range(1, len(entropies) + 1), entropies, label='Entropy of q_t')
+    pyplot.plot(range(1, len(model_log_likelihoods) + 1),model_log_likelihoods, label='E[logp] w.r.t. q_t')
+    pyplot.title('ELBO(p, q_t)');
+    pyplot.legend();
+    pyplot.xlabel('Approximation components')
+    pyplot.ylabel('Log probability')
+    pyplot.show()
     print(weights)
     print(locs)
     print(scales)
@@ -204,7 +234,7 @@ def boosting_bbvi():
         total_approximation += Y
     pyplot.plot(X, total_approximation)
     pyplot.plot(data.data.numpy(), np.zeros(len(data)), 'k*')
-    pyplot.title('Approximation of posterior over mu')
+    pyplot.title('Approximation of posterior over mu with lambda={}'.format(relbo_lambda))
     pyplot.ylabel('probability density');
     pyplot.show()
 
