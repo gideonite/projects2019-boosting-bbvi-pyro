@@ -4,7 +4,7 @@ import torch
 import torch.distributions.constraints as constraints
 import pyro
 from pyro.optim import Adam, SGD
-from pyro.infer import SVI, Trace_ELBO, config_enumerate, TraceEnum_ELBO
+from pyro.infer import SVI, Trace_ELBO, config_enumerate, TraceEnum_ELBO, Predictive
 import pyro.distributions as dist
 from pyro.infer.autoguide import AutoDelta
 from pyro import poutine    
@@ -20,6 +20,7 @@ from pyro.infer import MCMC, NUTS
 import pandas as pd
 import pickle
 from pyro.infer.autoguide import AutoDiagonalNormal
+import inspect
 
 
 
@@ -45,7 +46,8 @@ def guide(observations, input_data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
     #variance_q = torch.eye(input_data.shape[1])
     mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
-    pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
+    w = pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
+    return w
 
 @config_enumerate
 def logistic_regression_model(observations, input_data):
@@ -57,12 +59,20 @@ def logistic_regression_model(observations, input_data):
 @config_enumerate
 def approximation(observations, input_data, components, weights):
     assignment = pyro.sample('assignment', dist.Categorical(weights))
-    distribution = components[assignment](observations, input_data)
+    w = components[assignment](observations, input_data)
+    return w
 
 def dummy_approximation(observations, input_data):
     variance_q = pyro.param('variance_0', torch.eye(input_data.shape[1]), constraints.positive)
     mu_q = pyro.param('mu_0', 20*torch.ones(input_data.shape[1]))
     pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
+
+def predictive_model(wrapped_approximation, observations, input_data):
+    w = wrapped_approximation(observations, input_data)
+    # w = w_dict['w']
+    with pyro.plate("data", input_data.shape[0]):
+      sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
+      obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
 
 def relbo(model, guide, *args, **kwargs):
 
@@ -126,7 +136,7 @@ def load_data():
 
 def boosting_bbvi():
 
-    n_iterations = 2
+    n_iterations = 1
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
     initial_approximation = dummy_approximation
@@ -242,6 +252,11 @@ def boosting_bbvi():
         print('Sigma{}: '.format(i))
         print(sigma)
 
+    wrapped_predictive_model = partial(predictive_model, wrapped_approximation=wrapped_approximation, observations=y_test, input_data=X_test)
+    predictive_trace = trace(wrapped_predictive_model).get_trace()
+    print('Log prob on test data')
+    print(predictive_trace.log_prob_sum())
+
 def run_mcmc():
 
     X_train, y_train, X_test, y_test = load_data()
@@ -265,7 +280,7 @@ def run_svi():
     X_train, y_train, X_test, y_test = load_data()
     n_steps = 5000
     n_iterations = 1
-    adam_params = {"lr": 0.0005, "betas": (0.90, 0.999)}
+    adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
     optimizer = Adam(adam_params)
 
     # setup the inference algorithm
@@ -294,6 +309,11 @@ def run_svi():
     pyplot.ylabel('-ELBO')
     pyplot.title('-ELBO against time for component {}'.format(1));
     pyplot.show()
+
+    wrapped_predictive_model = partial(predictive_model, wrapped_approximation=wrapped_guide, observations=y_test, input_data=X_test)
+    predictive_trace = trace(wrapped_predictive_model).get_trace()
+    print('Log prob on test data')
+    print(predictive_trace.log_prob_sum())
 
 if __name__ == '__main__':
   boosting_bbvi()
