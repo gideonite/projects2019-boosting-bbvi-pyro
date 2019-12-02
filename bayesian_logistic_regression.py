@@ -22,8 +22,6 @@ import pickle
 from pyro.infer.autoguide import AutoDiagonalNormal
 import inspect
 
-
-
 PRINT_INTERMEDIATE_LATENT_VALUES = False
 PRINT_TRACES = False
 
@@ -42,6 +40,7 @@ model_log_prob = []
 guide_log_prob = []
 approximation_log_prob = []
 
+@config_enumerate
 def guide(observations, input_data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
     #variance_q = torch.eye(input_data.shape[1])
@@ -69,7 +68,8 @@ def dummy_approximation(observations, input_data):
 
 def predictive_model(wrapped_approximation, observations, input_data):
     w = wrapped_approximation(observations, input_data)
-    # w = w_dict['w']
+    if type(w) is dict:
+        w = w['w']
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
@@ -86,8 +86,6 @@ def relbo(model, guide, *args, **kwargs):
     model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
 
     #print(model_trace.nodes['obs'])
-
-
 
     approximation_trace = trace(replay(block(approximation, expose=['w']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
@@ -136,7 +134,7 @@ def load_data():
 
 def boosting_bbvi():
 
-    n_iterations = 1
+    n_iterations = 2
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
     initial_approximation = dummy_approximation
@@ -150,6 +148,8 @@ def boosting_bbvi():
 
     gradient_norms = defaultdict(list)
     duality_gap = []
+    model_log_likelihoods = []
+    entropies = []
     for t in range(1, n_iterations + 1):
         # setup the inference algorithm
         wrapped_guide = partial(guide, index=t)
@@ -172,6 +172,10 @@ def boosting_bbvi():
         global approximation_log_prob
         approximation_log_prob = []
 
+        if t == 1:
+            n_steps = 5000
+        else: 
+            n_steps = 1000
 
         svi = SVI(logistic_regression_model, wrapped_guide, optimizer, loss=relbo)
         for step in range(n_steps):
@@ -207,18 +211,28 @@ def boosting_bbvi():
         components.append(wrapped_guide)
         new_weight = 2 / (t + 1)
 
+        if t == 2:
+            new_weight = 0.05
         weights = weights * (1-new_weight)
         weights = torch.cat((weights, torch.tensor([new_weight])))
 
         wrapped_approximation = partial(approximation, components=components, weights=weights)
 
         e_log_p = 0
-        for i in range(50):
+        n_samples = 50
+        entropy = 0
+        model_log_likelihood = 0
+        elbo = 0
+        for i in range(n_samples):
             qt_trace = trace(wrapped_approximation).get_trace(y_train, X_train)
             replayed_model_trace = trace(replay(logistic_regression_model, qt_trace)).get_trace(y_train, X_train)
-            e_log_p = e_log_p + replayed_model_trace.log_prob_sum()
+            model_log_likelihood += replayed_model_trace.log_prob_sum()
+            entropy -= qt_trace.log_prob_sum()
+            elbo = elbo + replayed_model_trace.log_prob_sum() - qt_trace.log_prob_sum()
 
-        duality_gap.append(replayed_model_trace.log_prob_sum()/10)
+        duality_gap.append(elbo/n_samples)
+        model_log_likelihoods.append(model_log_likelihood/n_samples)
+        entropies.append(entropy/n_samples)
 
         # scale = pyro.param("variance_{}".format(t)).item()
         # scales.append(scale)
@@ -238,8 +252,11 @@ def boosting_bbvi():
     pyplot.show()  
 
 
-    pyplot.plot(range(1, len(duality_gap) + 1), duality_gap)
-    pyplot.title('E[log p] w.r.t. q_t');
+    pyplot.plot(range(1, len(duality_gap) + 1), duality_gap, label='ELBO')
+    pyplot.plot(range(1, len(entropies) + 1), entropies, label='Entropy of q_t')
+    pyplot.plot(range(1, len(model_log_likelihoods) + 1),model_log_likelihoods, label='E[logp] w.r.t. q_t')
+    pyplot.title('ELBO(p, q_t)');
+    pyplot.legend();
     pyplot.xlabel('Approximation components')
     pyplot.ylabel('Log probability')
     pyplot.show()
@@ -253,9 +270,13 @@ def boosting_bbvi():
         print(sigma)
 
     wrapped_predictive_model = partial(predictive_model, wrapped_approximation=wrapped_approximation, observations=y_test, input_data=X_test)
-    predictive_trace = trace(wrapped_predictive_model).get_trace()
+    n_samples = 50
+    log_likelihood = 0
+    for i in range(n_samples):
+        predictive_trace = trace(wrapped_predictive_model).get_trace()
+        log_likelihood += predictive_trace.log_prob_sum()
     print('Log prob on test data')
-    print(predictive_trace.log_prob_sum())
+    print(log_likelihood/n_samples)
 
 def run_mcmc():
 
@@ -278,8 +299,7 @@ def run_mcmc():
 def run_svi():
     # setup the optimizer
     X_train, y_train, X_test, y_test = load_data()
-    n_steps = 5000
-    n_iterations = 1
+    n_steps = 10000
     adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
     optimizer = Adam(adam_params)
 
@@ -311,9 +331,13 @@ def run_svi():
     pyplot.show()
 
     wrapped_predictive_model = partial(predictive_model, wrapped_approximation=wrapped_guide, observations=y_test, input_data=X_test)
-    predictive_trace = trace(wrapped_predictive_model).get_trace()
+    n_samples = 50
+    log_likelihood = 0
+    for i in range(n_samples):
+        predictive_trace = trace(wrapped_predictive_model).get_trace()
+        log_likelihood += predictive_trace.log_prob_sum()
     print('Log prob on test data')
-    print(predictive_trace.log_prob_sum())
+    print(log_likelihood/n_samples)
 
 if __name__ == '__main__':
   boosting_bbvi()
