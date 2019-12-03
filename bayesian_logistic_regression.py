@@ -122,7 +122,7 @@ def load_data():
 
 def boosting_bbvi():
 
-    n_iterations = 1
+    n_iterations = 2
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
     initial_approximation = Guide(index=0, n_variables=X_train.shape[1])
@@ -180,15 +180,15 @@ def boosting_bbvi():
         # pyplot.title('-ELBO against time for component {}'.format(t));
         # pyplot.show()
 
-        pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
-        pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
-        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
-        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
-        pyplot.xlabel('Update Steps')
-        pyplot.ylabel('Log Prob')
-        pyplot.title('RELBO components throughout SVI'.format(t));
-        pyplot.legend()
-        pyplot.show()
+        # pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
+        # pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
+        # pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
+        # pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
+        # pyplot.xlabel('Update Steps')
+        # pyplot.ylabel('Log Prob')
+        # pyplot.title('RELBO components throughout SVI'.format(t));
+        # pyplot.legend()
+        # pyplot.show()
 
         wrapped_approximation.components.append(wrapped_guide)
         new_weight = 2 / (t + 1)
