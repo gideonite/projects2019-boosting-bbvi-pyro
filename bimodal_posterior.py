@@ -16,6 +16,7 @@ from pyro.infer.autoguide import AutoDelta
 from collections import defaultdict
 import matplotlib
 from matplotlib import pyplot
+from bbbvi import relbo, Approximation
 
 PRINT_INTERMEDIATE_LATENT_VALUES = False
 PRINT_TRACES = False
@@ -54,61 +55,19 @@ def model(data):
         # Local variables.
         pyro.sample('obs_{}'.format(i), dist.Normal(mu*mu, variance), obs=data[i])
 
-@config_enumerate
-def approximation(data, components, weights):
-    assignment = pyro.sample('assignment', dist.Categorical(weights))
-    distribution = components[assignment](data)
 
 def dummy_approximation(data):
     variance_q = pyro.param('variance_0', torch.tensor([1.0]), constraints.positive)
     mu_q = pyro.param('mu_0', torch.tensor([20.0]))
     pyro.sample("mu", dist.Normal(mu_q, variance_q))
 
-def relbo(model, guide, *args, **kwargs):
-
-    approximation = kwargs.pop('approximation', None)
-    relbo_lambda = kwargs.pop('relbo_lambda', None)
-    # Run the guide with the arguments passed to SVI.step() and trace the execution,
-    # i.e. record all the calls to Pyro primitives like sample() and param().
-    #print("enter relbo")
-    guide_trace = trace(guide).get_trace(*args, **kwargs)
-    #print(guide_trace.nodes['obs_1'])
-    model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
-    #print(model_trace.nodes['obs_1'])
-
-
-    approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
-    # We will accumulate the various terms of the ELBO in `elbo`.
-
-    guide_log_prob.append(guide_trace.log_prob_sum())
-    model_log_prob.append(model_trace.log_prob_sum())
-    approximation_log_prob.append(approximation_trace.log_prob_sum())
-
-    # This is how we computed the ELBO before using TraceEnum_ELBO:
-    elbo = model_trace.log_prob_sum() - relbo_lambda * guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
-
-    # loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
-    #                                                            guide,
-    #                                                     *args, **kwargs)
-
-    # print(loss_fn)
-    # print(approximation_trace.log_prob_sum())
-    #elbo = -loss_fn - approximation_trace.log_prob_sum()
-    # Return (-elbo) since by convention we do gradient descent on a loss and
-    # the ELBO is a lower bound that needs to be maximized.
-
-    return -elbo
-
-
 def boosting_bbvi():
-    n_iterations = 6
-
+    n_iterations = 2
     relbo_lambda = 1
     initial_approximation = dummy_approximation
     components = [initial_approximation]
     weights = torch.tensor([1.])
-    wrapped_approximation = partial(approximation, components=components,
-                                    weights=weights)
+    wrapped_approximation = Approximation(components, weights)
 
     locs = [0]
     scales = [0]
@@ -161,23 +120,23 @@ def boosting_bbvi():
         pyplot.title('-ELBO against time for component {}'.format(t));
         pyplot.show()
 
-        pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
-        pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
-        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
-        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
-        pyplot.xlabel('Update Steps')
-        pyplot.ylabel('Log Prob')
-        pyplot.title('RELBO components throughout SVI'.format(t));
-        pyplot.legend()
-        pyplot.show()
+        # pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
+        # pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
+        # pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
+        # pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
+        # pyplot.xlabel('Update Steps')
+        # pyplot.ylabel('Log Prob')
+        # pyplot.title('RELBO components throughout SVI'.format(t));
+        # pyplot.legend()
+        # pyplot.show()
 
-        components.append(wrapped_guide)
+        wrapped_approximation.components.append(wrapped_guide)
         new_weight = 2 / (t + 1)
 
         weights = weights * (1-new_weight)
         weights = torch.cat((weights, torch.tensor([new_weight])))
 
-        wrapped_approximation = partial(approximation, components=components, weights=weights)
+        wrapped_approximation.weights = weights
 
         e_log_p = 0
         n_samples = 50

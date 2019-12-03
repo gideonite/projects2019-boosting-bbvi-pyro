@@ -21,6 +21,7 @@ import pandas as pd
 import pickle
 from pyro.infer.autoguide import AutoDiagonalNormal
 import inspect
+from bbbvi import relbo, Approximation
 
 PRINT_INTERMEDIATE_LATENT_VALUES = False
 PRINT_TRACES = False
@@ -40,26 +41,48 @@ model_log_prob = []
 guide_log_prob = []
 approximation_log_prob = []
 
-@config_enumerate
-def guide(observations, input_data, index):
-    variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
-    #variance_q = torch.eye(input_data.shape[1])
-    mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
-    w = pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
-    return w
+# @config_enumerate
+# def guide(observations, input_data, index):
+#     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
+#     #variance_q = torch.eye(input_data.shape[1])
+#     mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
+#     w = pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
+#     return w
 
-@config_enumerate
+class Guide:
+    def __init__(self, index, n_variables, initial_loc=None, initial_scale=None):
+        self.index = index
+        self.n_variables = n_variables
+        if not initial_loc:
+            self.initial_loc = torch.zeros(n_variables)
+            self.initial_scale = torch.eye(n_variables)
+        else:
+            self.initial_scale = initial_scale
+            self.initial_loc = initial_loc    
+
+    def get_distribution(self):
+        scale_q = pyro.param('scale_{}'.format(self.index), self.initial_scale, constraints.positive)
+        #scale_q = torch.eye(self.n_variables)
+        locs_q = pyro.param('locs_{}'.format(self.index), self.initial_loc)
+        return dist.MultivariateNormal(locs_q, scale_q)
+
+    def __call__(self, observations, input_data):
+        distribution = self.get_distribution()
+        w = pyro.sample("w", distribution)
+        return w
+        
 def logistic_regression_model(observations, input_data):
     w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.eye(input_data.shape[1])))
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
 
-@config_enumerate
-def approximation(observations, input_data, components, weights):
-    assignment = pyro.sample('assignment', dist.Categorical(weights))
-    w = components[assignment](observations, input_data)
-    return w
+# @config_enumerate
+# def approximation(observations, input_data, components, weights):
+#     assignment = pyro.sample('assignment', dist.Categorical(weights))
+#     distribution = components[assignment].get_distribution()
+#     w = pyro.sample("w", distribution)
+#     return w
 
 def dummy_approximation(observations, input_data):
     variance_q = pyro.param('variance_0', torch.eye(input_data.shape[1]), constraints.positive)
@@ -73,41 +96,6 @@ def predictive_model(wrapped_approximation, observations, input_data):
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
-
-def relbo(model, guide, *args, **kwargs):
-
-    approximation = kwargs.pop('approximation', None)
-    relbo_lambda = kwargs.pop('relbo_lambda', None)
-    # Run the guide with the arguments passed to SVI.step() and trace the execution,
-    # i.e. record all the calls to Pyro primitives like sample() and param().
-    #print("enter relbo")
-    guide_trace = trace(guide).get_trace(*args, **kwargs)
-    #print(guide_trace.nodes['obs_1'])
-    model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
-
-    #print(model_trace.nodes['obs'])
-
-    approximation_trace = trace(replay(block(approximation, expose=['w']), guide_trace)).get_trace(*args, **kwargs)
-    # We will accumulate the various terms of the ELBO in `elbo`.
-
-    guide_log_prob.append(guide_trace.log_prob_sum())
-    model_log_prob.append(model_trace.log_prob_sum())
-    approximation_log_prob.append(approximation_trace.log_prob_sum())
-
-    # This is how we computed the ELBO before using TraceEnum_ELBO:
-    elbo = model_trace.log_prob_sum() - relbo_lambda * guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
-
-    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
-                                                                guide,
-                                                         *args, **kwargs)
-
-    # print(loss_fn)
-    # print(approximation_trace.log_prob_sum())
-    elbo = -loss_fn - approximation_trace.log_prob_sum()
-    # Return (-elbo) since by convention we do gradient descent on a loss and
-    # the ELBO is a lower bound that needs to be maximized.
-
-    return -elbo
 
 
 # Utility function to print latent sites' quantile information.
@@ -134,14 +122,14 @@ def load_data():
 
 def boosting_bbvi():
 
-    n_iterations = 2
+    n_iterations = 1
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
-    initial_approximation = dummy_approximation
+    initial_approximation = Guide(index=0, n_variables=X_train.shape[1])
     components = [initial_approximation]
+
     weights = torch.tensor([1.])
-    wrapped_approximation = partial(approximation, components=components,
-                                    weights=weights)
+    wrapped_approximation = Approximation(components, weights)
 
     locs = [0]
     scales = [0]
@@ -152,12 +140,11 @@ def boosting_bbvi():
     entropies = []
     for t in range(1, n_iterations + 1):
         # setup the inference algorithm
-        wrapped_guide = partial(guide, index=t)
+        wrapped_guide = Guide(index=t, n_variables=X_train.shape[1])
         # do gradient steps
         losses = []
         # Register hooks to monitor gradient norms.
         wrapped_guide(y_train, X_train)
-        print(pyro.get_param_store().named_parameters())
 
         adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
@@ -172,11 +159,6 @@ def boosting_bbvi():
         global approximation_log_prob
         approximation_log_prob = []
 
-        if t == 1:
-            n_steps = 5000
-        else: 
-            n_steps = 1000
-
         svi = SVI(logistic_regression_model, wrapped_guide, optimizer, loss=relbo)
         for step in range(n_steps):
             loss = svi.step(y_train, X_train, approximation=wrapped_approximation, relbo_lambda=relbo_lambda)
@@ -185,7 +167,7 @@ def boosting_bbvi():
             if PRINT_INTERMEDIATE_LATENT_VALUES:
                 print('Loss: {}'.format(loss))
                 variance = pyro.param("variance_{}".format(t)).item()
-                mu = pyro.param("mu_{}".format(t)).item()
+                mu = pyro.param("locs_{}".format(t)).item()
                 print('mu = {}'.format(mu))
                 print('variance = {}'.format(variance))
 
@@ -208,7 +190,7 @@ def boosting_bbvi():
         pyplot.legend()
         pyplot.show()
 
-        components.append(wrapped_guide)
+        wrapped_approximation.components.append(wrapped_guide)
         new_weight = 2 / (t + 1)
 
         if t == 2:
@@ -216,7 +198,7 @@ def boosting_bbvi():
         weights = weights * (1-new_weight)
         weights = torch.cat((weights, torch.tensor([new_weight])))
 
-        wrapped_approximation = partial(approximation, components=components, weights=weights)
+        wrapped_approximation.weights = weights
 
         e_log_p = 0
         n_samples = 50
@@ -262,8 +244,8 @@ def boosting_bbvi():
     pyplot.show()
 
     for i in range(1, n_iterations + 1):
-        mu = pyro.param('mu_{}'.format(i))
-        sigma = pyro.param('variance_{}'.format(i))
+        mu = pyro.param('locs_{}'.format(i))
+        sigma = pyro.param('scale_{}'.format(i))
         print('Mu_{}: '.format(i))
         print(mu)
         print('Sigma{}: '.format(i))
