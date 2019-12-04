@@ -186,7 +186,7 @@ def boosting_bbvi():
         # Register hooks to monitor gradient norms.
         wrapped_guide(y_train, X_train)
 
-        adam_params = {"lr": 0.008, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.01, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
@@ -322,7 +322,7 @@ def run_svi():
     # setup the optimizer
     X_train, y_train, X_test, y_test = load_data()
     n_steps = 10000
-    adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
+    adam_params = {"lr": 0.01, "betas": (0.90, 0.999)}
     optimizer = Adam(adam_params)
 
     # setup the inference algorithm
@@ -362,4 +362,4 @@ def run_svi():
     print(log_likelihood/n_samples)
 
 if __name__ == '__main__':
-  boosting_bbvi()
+  run_svi()
