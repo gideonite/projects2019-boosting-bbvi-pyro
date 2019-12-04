@@ -28,7 +28,7 @@ PRINT_TRACES = False
 
 # this is for running the notebook in our testing framework
 smoke_test = ('CI' in os.environ)
-n_steps = 2 if smoke_test else 5000
+n_steps = 2 if smoke_test else 10000
 pyro.set_rng_seed(2)
 
 # enable validation (e.g. validate parameters of distributions)
@@ -55,7 +55,7 @@ class Guide:
         self.n_variables = n_variables
         if not initial_loc:
             self.initial_loc = torch.zeros(n_variables)
-            self.initial_scale = torch.eye(n_variables)
+            self.initial_scale = torch.ones(n_variables)
         else:
             self.initial_scale = initial_scale
             self.initial_loc = initial_loc    
@@ -64,7 +64,7 @@ class Guide:
         scale_q = pyro.param('scale_{}'.format(self.index), self.initial_scale, constraints.positive)
         #scale_q = torch.eye(self.n_variables)
         locs_q = pyro.param('locs_{}'.format(self.index), self.initial_loc)
-        return dist.MultivariateNormal(locs_q, scale_q)
+        return dist.Laplace(locs_q, scale_q).to_event(1)
 
     def __call__(self, observations, input_data):
         distribution = self.get_distribution()
@@ -72,7 +72,7 @@ class Guide:
         return w
         
 def logistic_regression_model(observations, input_data):
-    w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.eye(input_data.shape[1])))
+    w = pyro.sample('w', dist.Laplace(torch.zeros(input_data.shape[1]), torch.ones(input_data.shape[1])).to_event(1))
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
@@ -86,7 +86,7 @@ def logistic_regression_model(observations, input_data):
 
 def dummy_approximation(observations, input_data):
     variance_q = pyro.param('variance_0', torch.eye(input_data.shape[1]), constraints.positive)
-    mu_q = pyro.param('mu_0', 20*torch.ones(input_data.shape[1]))
+    mu_q = pyro.param('mu_0', 100*torch.ones(input_data.shape[1]))
     pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
 
 def predictive_model(wrapped_approximation, observations, input_data):
@@ -120,12 +120,52 @@ def load_data():
 
     return X_train, y_train, X_test, y_test
 
+
+def relbo(model, guide, *args, **kwargs):
+
+    approximation = kwargs.pop('approximation', None)
+    relbo_lambda = kwargs.pop('relbo_lambda', None)
+    # Run the guide with the arguments passed to SVI.step() and trace the execution,
+    # i.e. record all the calls to Pyro primitives like sample() and param().
+    #print("enter relbo")
+    guide_trace = trace(guide).get_trace(*args, **kwargs)
+    #print(guide_trace.nodes['obs_1'])
+    model_trace = trace(replay(model, guide_trace)).get_trace(*args, **kwargs)
+    #print(model_trace.nodes['obs_1'])
+
+
+    approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
+    # We will accumulate the various terms of the ELBO in `elbo`.
+
+    guide_log_prob.append(guide_trace.log_prob_sum())
+    model_log_prob.append(model_trace.log_prob_sum())
+    approximation_log_prob.append(approximation_trace.log_prob_sum())
+
+    # This is how we computed the ELBO before using TraceEnum_ELBO:
+    elbo = model_trace.log_prob_sum() - relbo_lambda * guide_trace.log_prob_sum() - approximation_trace.log_prob_sum()
+
+    loss_fn = pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(model,
+                                                               guide,
+                                                         *args, **kwargs)
+
+    # print(loss_fn)
+    # print(approximation_trace.log_prob_sum())
+    elbo = -loss_fn - approximation_trace.log_prob_sum()
+    #elbo = -loss_fn + 0.1 * pyro.infer.TraceEnum_ELBO(max_plate_nesting=1).differentiable_loss(approximation,
+    #                                                           guide,
+    #                                                     *args, **kwargs)
+    # Return (-elbo) since by convention we do gradient descent on a loss and
+    # the ELBO is a lower bound that needs to be maximized.
+
+    return -elbo
+
 def boosting_bbvi():
 
     n_iterations = 2
     X_train, y_train, X_test, y_test = load_data()
     relbo_lambda = 1
-    initial_approximation = Guide(index=0, n_variables=X_train.shape[1])
+    #initial_approximation = Guide(index=0, n_variables=X_train.shape[1])
+    initial_approximation = dummy_approximation
     components = [initial_approximation]
 
     weights = torch.tensor([1.])
@@ -146,7 +186,7 @@ def boosting_bbvi():
         # Register hooks to monitor gradient norms.
         wrapped_guide(y_train, X_train)
 
-        adam_params = {"lr": 0.005, "betas": (0.90, 0.999)}
+        adam_params = {"lr": 0.008, "betas": (0.90, 0.999)}
         optimizer = Adam(adam_params)
         for name, value in pyro.get_param_store().named_parameters():
             if not name in gradient_norms:
@@ -180,21 +220,21 @@ def boosting_bbvi():
         # pyplot.title('-ELBO against time for component {}'.format(t));
         # pyplot.show()
 
-        # pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
-        # pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
-        # pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
-        # pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
-        # pyplot.xlabel('Update Steps')
-        # pyplot.ylabel('Log Prob')
-        # pyplot.title('RELBO components throughout SVI'.format(t));
-        # pyplot.legend()
-        # pyplot.show()
+        pyplot.plot(range(len(guide_log_prob)), -1 * np.array(guide_log_prob), 'b-', label='- Guide log prob')
+        pyplot.plot(range(len(approximation_log_prob)), -1 * np.array(approximation_log_prob), 'r-', label='- Approximation log prob')
+        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob), 'g-', label='Model log prob')
+        pyplot.plot(range(len(model_log_prob)), np.array(model_log_prob) -1 * np.array(approximation_log_prob) -1 * np.array(guide_log_prob), label='RELBO')
+        pyplot.xlabel('Update Steps')
+        pyplot.ylabel('Log Prob')
+        pyplot.title('RELBO components throughout SVI'.format(t));
+        pyplot.legend()
+        pyplot.show()
 
         wrapped_approximation.components.append(wrapped_guide)
         new_weight = 2 / (t + 1)
 
-        if t == 2:
-            new_weight = 0.05
+        # if t == 2:
+        #     new_weight = 0.05
         weights = weights * (1-new_weight)
         weights = torch.cat((weights, torch.tensor([new_weight])))
 
