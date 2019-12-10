@@ -64,7 +64,7 @@ class Guide:
         scale_q = pyro.param('scale_{}'.format(self.index), self.initial_scale, constraints.positive)
         #scale_q = torch.eye(self.n_variables)
         locs_q = pyro.param('locs_{}'.format(self.index), self.initial_loc)
-        return dist.Laplace(locs_q, scale_q).to_event(1)
+        return dist.MultivariateNormal(locs_q, scale_q).to_event(1)
 
     def __call__(self, observations, input_data):
         distribution = self.get_distribution()
@@ -72,7 +72,7 @@ class Guide:
         return w
         
 def logistic_regression_model(observations, input_data):
-    w = pyro.sample('w', dist.Laplace(torch.zeros(input_data.shape[1]), torch.ones(input_data.shape[1])).to_event(1))
+    w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.ones(input_data.shape[1])).to_event(1))
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
@@ -362,4 +362,4 @@ def run_svi():
     print(log_likelihood/n_samples)
 
 if __name__ == '__main__':
-  run_svi()
+  boosting_bbvi()
