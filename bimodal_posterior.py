@@ -38,6 +38,7 @@ model_log_prob = []
 guide_log_prob = []
 approximation_log_prob = []
 
+
 def guide(data, index):
     variance_q = pyro.param('variance_{}'.format(index), torch.tensor([1.0]), constraints.positive)
     mu_q = pyro.param('mu_{}'.format(index), torch.tensor([1.0]))
@@ -97,7 +98,6 @@ def boosting_bbvi():
         guide_log_prob = []
         global approximation_log_prob
         approximation_log_prob = []
-
 
         svi = SVI(model, wrapped_guide, optimizer, loss=relbo)
         for step in range(n_steps):

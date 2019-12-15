@@ -42,12 +42,12 @@ guide_log_prob = []
 approximation_log_prob = []
 
 # @config_enumerate
-# def guide(observations, input_data, index):
-#     variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
-#     #variance_q = torch.eye(input_data.shape[1])
-#     mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
-#     w = pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
-#     return w
+def guide(observations, input_data, index):
+    variance_q = pyro.param('variance_{}'.format(index), torch.eye(input_data.shape[1]), constraints.positive)
+    #variance_q = torch.eye(input_data.shape[1])
+    mu_q = pyro.param('mu_{}'.format(index), torch.zeros(input_data.shape[1]))
+    w = pyro.sample("w", dist.MultivariateNormal(mu_q, variance_q))
+    return w
 
 class Guide:
     def __init__(self, index, n_variables, initial_loc=None, initial_scale=None):
@@ -55,7 +55,7 @@ class Guide:
         self.n_variables = n_variables
         if not initial_loc:
             self.initial_loc = torch.zeros(n_variables)
-            self.initial_scale = torch.ones(n_variables)
+            self.initial_scale = torch.eye(n_variables)
         else:
             self.initial_scale = initial_scale
             self.initial_loc = initial_loc    
@@ -64,7 +64,7 @@ class Guide:
         scale_q = pyro.param('scale_{}'.format(self.index), self.initial_scale, constraints.positive)
         #scale_q = torch.eye(self.n_variables)
         locs_q = pyro.param('locs_{}'.format(self.index), self.initial_loc)
-        return dist.MultivariateNormal(locs_q, scale_q).to_event(1)
+        return dist.MultivariateNormal(locs_q, scale_q)
 
     def __call__(self, observations, input_data):
         distribution = self.get_distribution()
@@ -72,7 +72,7 @@ class Guide:
         return w
         
 def logistic_regression_model(observations, input_data):
-    w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.ones(input_data.shape[1])).to_event(1))
+    w = pyro.sample('w', dist.MultivariateNormal(torch.zeros(input_data.shape[1]), torch.eye(input_data.shape[1])))
     with pyro.plate("data", input_data.shape[0]):
       sigmoid = torch.sigmoid(torch.matmul(input_data, w.double()))
       obs = pyro.sample('obs', dist.Bernoulli(sigmoid), obs=observations)
@@ -134,7 +134,7 @@ def relbo(model, guide, *args, **kwargs):
     #print(model_trace.nodes['obs_1'])
 
 
-    approximation_trace = trace(replay(block(approximation, expose=['mu']), guide_trace)).get_trace(*args, **kwargs)
+    approximation_trace = trace(replay(block(approximation, expose=['w']), guide_trace)).get_trace(*args, **kwargs)
     # We will accumulate the various terms of the ELBO in `elbo`.
 
     guide_log_prob.append(guide_trace.log_prob_sum())
