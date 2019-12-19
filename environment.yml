@@ -8,6 +8,7 @@ dependencies:
   - scipy
   - torchvision
   - pytorch
+  - pandas
   - pip
   - pip:
     - pyro-ppl==0.5.1
